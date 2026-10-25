@@ -1,0 +1,113 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: |
+          npm install --legacy-peer-deps
+
+      - name: Build Web Assets
+        run: |
+          if npm run | grep -q "build:web"; then
+            npm run build:web
+          elif npx vite --version >/dev/null 2>&1; then
+            npx vite build
+          else
+            npm run build
+          fi
+
+      - name: Setup & Sync Capacitor iOS
+        run: |
+          npm install @capacitor/core @capacitor/cli @capacitor/ios --legacy-peer-deps
+
+          # Tự động tìm thư mục chứa index.html sau khi build
+          WEB_DIR="dist"
+          if [ -d "out/renderer" ]; then
+            WEB_DIR="out/renderer"
+          elif [ -d "dist" ]; then
+            WEB_DIR="dist"
+          elif [ -d "build" ]; then
+            WEB_DIR="build"
+          elif [ -d "www" ]; then
+            WEB_DIR="www"
+          else
+            mkdir -p dist
+          fi
+          echo "Detected webDir: $WEB_DIR"
+
+          # Tạo mới capacitor.config.json chuẩn để không bị lỗi thiếu config
+          rm -f capacitor.config.ts capacitor.config.js capacitor.config.json
+          cat <<EOF > capacitor.config.json
+          {
+            "appId": "com.folia.app",
+            "appName": "Folia",
+            "webDir": "$WEB_DIR",
+            "bundledWebRuntime": false
+          }
+          EOF
+
+          rm -rf ios
+          npx cap add ios
+          npx cap sync ios
+
+      - name: Enable Background Audio in Info.plist
+        run: |
+          PLIST="ios/App/App/Info.plist"
+          /usr/libexec/PlistBuddy -c "Delete :UIBackgroundModes" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes array" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Add :UIBackgroundModes:0 string audio" "$PLIST"
+
+      - name: Compile Xcode Project (Unsigned)
+        run: |
+          if [ -d "ios/App/App.xcworkspace" ]; then
+            xcodebuild -workspace ios/App/App.xcworkspace \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath build \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES
+          else
+            xcodebuild -project ios/App/App.xcodeproj \
+              -scheme App \
+              -configuration Release \
+              -sdk iphoneos \
+              -derivedDataPath build \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              AD_HOC_CODE_SIGNING_ALLOWED=YES
+          fi
+
+      - name: Package to IPA
+        run: |
+          APP_PATH=$(find build -name "App.app" -type d | head -n 1)
+          if [ -z "$APP_PATH" ]; then
+            echo "Không tìm thấy App.app!"
+            exit 1
+          fi
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r Folia.ipa Payload
+
+      - name: Upload IPA Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Folia-IPA
+          path: Folia.ipa

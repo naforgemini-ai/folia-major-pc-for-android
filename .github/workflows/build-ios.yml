@@ -32,9 +32,16 @@ jobs:
 
       - name: Setup & Sync Capacitor iOS
         run: |
-          npm install @capacitor/core @capacitor/cli @capacitor/ios --legacy-peer-deps
+          # Lấy đúng phiên bản @capacitor/core sẵn có trong dự án để đồng bộ với @capacitor/ios
+          if [ -f "node_modules/@capacitor/core/package.json" ]; then
+            CAP_VER=$(node -p "require('./node_modules/@capacitor/core/package.json').version")
+            echo "Synchronizing Capacitor version: $CAP_VER"
+            npm install @capacitor/core@$CAP_VER @capacitor/cli@$CAP_VER @capacitor/ios@$CAP_VER --legacy-peer-deps
+          else
+            npm install @capacitor/core@6 @capacitor/cli@6 @capacitor/ios@6 --legacy-peer-deps
+          fi
 
-          # Tự động tìm thư mục chứa index.html sau khi build
+          # Tự động tìm thư mục chứa giao diện web sau khi build
           WEB_DIR="dist"
           if [ -d "out/renderer" ]; then
             WEB_DIR="out/renderer"
@@ -49,7 +56,7 @@ jobs:
           fi
           echo "Detected webDir: $WEB_DIR"
 
-          # Tạo mới capacitor.config.json chuẩn để không bị lỗi thiếu config
+          # Tạo file cấu hình capacitor.config.json chuẩn
           rm -f capacitor.config.ts capacitor.config.js capacitor.config.json
           cat <<EOF > capacitor.config.json
           {
@@ -61,7 +68,16 @@ jobs:
           EOF
 
           rm -rf ios
-          npx cap add ios
+          npx cap add ios || true
+
+          # Nâng mức iOS tối thiểu (Minimum Deployment Target) lên 15.0 trong Podfile và Xcode
+          if [ -f "ios/App/Podfile" ]; then
+            sed -i '' "s/platform :ios, '[^']*'/platform :ios, '15.0'/g" ios/App/Podfile
+          fi
+          if [ -f "ios/App/App.xcodeproj/project.pbxproj" ]; then
+            sed -i '' "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]*;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" ios/App/App.xcodeproj/project.pbxproj
+          fi
+
           npx cap sync ios
 
       - name: Enable Background Audio in Info.plist
@@ -78,7 +94,9 @@ jobs:
               -scheme App \
               -configuration Release \
               -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
               -derivedDataPath build \
+              IPHONEOS_DEPLOYMENT_TARGET=15.0 \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY="" \
@@ -88,7 +106,9 @@ jobs:
               -scheme App \
               -configuration Release \
               -sdk iphoneos \
+              -destination 'generic/platform=iOS' \
               -derivedDataPath build \
+              IPHONEOS_DEPLOYMENT_TARGET=15.0 \
               CODE_SIGNING_ALLOWED=NO \
               CODE_SIGNING_REQUIRED=NO \
               CODE_SIGN_IDENTITY="" \
